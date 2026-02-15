@@ -55,7 +55,7 @@ class TikTokScanner:
             )
             
             if self.cookies:
-                print(f"Loading {len(self.cookies)} cookies...")
+                console_manager.print_final(f"🍪 Loading {len(self.cookies)} cookies...", color=YELLOW)
                 await context.add_cookies(self.cookies)
 
             page = await context.new_page()
@@ -65,13 +65,13 @@ class TikTokScanner:
 
             try:
                 # Go to profile
-                print("Navigating to profile...")
+                console_manager.print_status("🚀 Navigating to profile...", color=CYAN)
                 await page.goto(self.profile_url, timeout=60000)
                 await page.wait_for_load_state("networkidle")
                 
                 # Check for errors or login walls
                 if "login" in page.url:
-                    print("Redirected to login. You might need to handle captcha manually or provide cookies.")
+                    console_manager.print_final("⚠️ Redirected to login. You might need to handle captcha manually or provide cookies.", color=RED)
 
                 # Advanced Captcha Verification
                 # Check URL or common captcha overlay texts
@@ -100,13 +100,13 @@ class TikTokScanner:
                                 pass
 
                 if captcha_detected:
-                    print("\n!!! Captcha or Verification detected !!!")
-                    print("Please solve the captcha in the browser window.")
+                    console_manager.print_final("\n🚨 !!! Captcha or Verification detected !!!", color=RED)
+                    console_manager.print_final("Please solve the captcha in the browser window.", color=YELLOW)
                     input("Press Enter here once you have solved it and the page has loaded...")
                     # Give it a moment to settle
                     await page.wait_for_timeout(3000)
                 
-                print("Scanning for videos...")
+                console_manager.print_status("🔍 Scanning for videos...", color=CYAN)
                 # Scroll and collect
                 last_height = await page.evaluate("document.body.scrollHeight")
                 while True:
@@ -121,7 +121,7 @@ class TikTokScanner:
                         if href and "/video/" in href:
                             self.video_urls.add(href)
                     
-                    print(f"Videos found so far: {len(self.video_urls)}", end='\r')
+                    console_manager.print_status(f"🔍 Scanning... Videos found so far: {len(self.video_urls)} ✨", color=CYAN)
 
                     # Scroll down
                     await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -149,7 +149,7 @@ class TikTokScanner:
                                     pass
 
                         if captcha_scroll_detected:
-                            print("\n!!! Captcha detected during scroll !!!")
+                            console_manager.print_final("🚨 !!! Captcha detected during scroll !!!", color=RED)
                             input("Press Enter here once you have solved it...")
                             await page.wait_for_timeout(3000)
                             new_height = await page.evaluate("document.body.scrollHeight") # Re-read height
@@ -161,7 +161,7 @@ class TikTokScanner:
                                 break
                     last_height = new_height
                 
-                print(f"\nScan complete. Total videos found: {len(self.video_urls)}")
+                console_manager.print_final(f"✨ Scan complete. Total videos found: {len(self.video_urls)}", color=GREEN)
 
             except Exception as e:
                 print(f"Error during scan: {e}")
@@ -192,6 +192,34 @@ class MyLogger:
     def error(self, msg):
         print(f"ERROR: {msg}")
 
+# ANSI Color Codes
+CYAN = "\033[96m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+RESET = "\033[0m"
+
+class ConsoleManager:
+    def __init__(self):
+        self.last_line_len = 0
+
+    def print_status(self, msg, color=RESET):
+        """Prints a message that overwrites the previous line."""
+        sys.stdout.write('\r' + ' ' * self.last_line_len + '\r')  # Clear line
+        sys.stdout.write(f"{color}{msg}{RESET}")
+        sys.stdout.flush()
+        # Calculate parsed length without color codes for clearing
+        clean_msg = re.sub(r'\x1b\[[0-9;]*m', '', msg)
+        self.last_line_len = len(clean_msg) + 10 # Buffer
+
+    def print_final(self, msg, color=RESET):
+        """Prints a final message and moves to the next line."""
+        self.print_status(msg, color)
+        sys.stdout.write('\n')
+        self.last_line_len = 0
+
+console_manager = ConsoleManager()
+
 def progress_hook(d):
     if d['status'] == 'downloading':
         try:
@@ -200,13 +228,12 @@ def progress_hook(d):
             eta = d.get('_eta_str', 'N/A')
             filename = os.path.basename(d.get('filename', 'Unknown'))
             
-            # Create a clean progress bar line
-            sys.stdout.write(f"\r[Downloading] {filename} | {p}% | Speed: {speed} | ETA: {eta}   ")
-            sys.stdout.flush()
+            msg = f"⬇️  [Downloading] {filename} | {p}% | Speed: {speed} | ETA: {eta}"
+            console_manager.print_status(msg, color=YELLOW)
         except:
             pass
     elif d['status'] == 'finished':
-        print(f"\n[Finished] Download complete: {os.path.basename(d['filename'])}")
+        console_manager.print_final(f"✅ [Finished] Download complete: {os.path.basename(d['filename'])}", color=GREEN)
 
 def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
     """Downloads videos using yt-dlp."""
@@ -236,7 +263,7 @@ def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
     # Download videos one by one to have better control over progress display
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         for index, url in enumerate(video_urls, 1):
-            print(f"\n[{index}/{len(video_urls)}] Processing: {url}")
+            console_manager.print_final(f"⬇️  [{index}/{len(video_urls)}] Processing: {url}", color=CYAN)
             ydl.download([url])
 
 async def main():
