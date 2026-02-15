@@ -220,22 +220,102 @@ class ConsoleManager:
 
 console_manager = ConsoleManager()
 
+# ANSI Cursor Controls
+UP = "\033[A"
+CLEAR = "\033[K"
+
+class VideoLogger:
+    def __init__(self, total_videos):
+        self.total = total_videos
+        self.current_index = 0
+        self.success_count = 0
+        self.error_count = 0
+        self.current_video_block_start = False
+
+    def start_video(self, index, username, video_id):
+        self.current_index = index
+        print(f"\n[{index:02d}/{self.total:02d}] {GREEN}🟢 STARTING:{RESET}  @{username} - {video_id}")
+        # placeholders
+        print(f"        {CYAN}TITLE:{RESET}     Waiting for metadata...")
+        print(f"        {CYAN}FORMAT:{RESET}    Detecting...")
+        sys.stdout.write(f"        {CYAN}STATUS:{RESET}    ⬇️  Initializing...")
+        sys.stdout.flush()
+        self.current_video_block_start = True
+
+    def update_metadata(self, title, fmt, size):
+        # Move up 2 lines to update TITLE, then FORMAT, then back to STATUS
+        sys.stdout.write(f"\r{UP}{UP}")
+        sys.stdout.write(f"\r        {CYAN}TITLE:{RESET}     {title[:50]}{'...' if len(title)>50 else ''}{CLEAR}\n")
+        sys.stdout.write(f"\r        {CYAN}FORMAT:{RESET}    {fmt} | {size}{CLEAR}\n")
+        # Restore cursor to STATUS line start
+        sys.stdout.write(f"\r        {CYAN}STATUS:{RESET}    ⬇️  Downloading...")
+        sys.stdout.flush()
+
+    def update_status(self, msg, color=RESET):
+        sys.stdout.write(f"\r{CLEAR}        {CYAN}STATUS:{RESET}    {color}{msg}{RESET}")
+        sys.stdout.flush()
+
+    def finish_video(self, status="success", error_msg=None):
+        if status == "success":
+            self.update_status(f"✅ Download Complete", color=GREEN)
+            self.success_count += 1
+        else:
+            self.update_status(f"❌ Error: {error_msg}", color=RED)
+            self.error_count += 1
+        print() # Newline to commit the block
+
+    def print_summary(self):
+        print("-" * 70)
+        print(f"SUMMARY: {self.success_count}/{self.total} Videos Processed Successfully | {self.error_count} Errors")
+
+video_logger = None
+
 def progress_hook(d):
+    global video_logger
+    if not video_logger:
+        return
+
     if d['status'] == 'downloading':
         try:
+            # Update metadata if we have it and haven't set it nicely yet
+            # Note: yt-dlp provides info_dict in d, but sometimes keys are missing in progress
+            # We check if we can update the static lines
+            if d.get('info_dict'): 
+                # This check might need more robustness as info_dict might not always be fully populated in progress hooks
+                pass
+            
             p = d.get('_percent_str', 'N/A').replace('%','')
             speed = d.get('_speed_str', 'N/A')
             eta = d.get('_eta_str', 'N/A')
-            filename = os.path.basename(d.get('filename', 'Unknown'))
             
-            msg = f"⬇️  [Downloading] {filename} | {p}% | Speed: {speed} | ETA: {eta}"
-            console_manager.print_status(msg, color=YELLOW)
+            # We can try to extract title/format if not done, but usually we might do this earlier or just update status
+            # For now, let's just update status with progress
+            video_logger.update_status(f"⬇️  {p}% | Speed: {speed} | ETA: {eta}", color=YELLOW)
         except:
             pass
     elif d['status'] == 'finished':
-        console_manager.print_final(f"✅ [Finished] Download complete: {os.path.basename(d['filename'])}", color=GREEN)
+        # Don't finish here yet, we might want to wait for post-processing? 
+        # Actually yt-dlp 'finished' means download finished. Post-processing might follow.
+        # But for this simple script, it's mostly done.
+        video_logger.update_status("✅ Finalizing...", color=GREEN)
+
+def post_processor_hook(d):
+    # This might be needed if we want to capture the final filename or post-processing status
+    pass
+
+class MyLogger:
+    def debug(self, msg):
+        pass
+    def info(self, msg):
+        pass
+    def warning(self, msg):
+        pass
+    def error(self, msg):
+        # We might want to catch errors to display in the block
+        pass
 
 def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
+    global video_logger
     """Downloads videos using yt-dlp."""
     if not video_urls:
         print("No videos to download.")
@@ -246,12 +326,13 @@ def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 
+    video_logger = VideoLogger(len(video_urls))
+
     ydl_opts = {
-        # Better naming scheme: Cookie_Date_ID_Title
         'outtmpl': os.path.join(output_folder, '%(uploader)s_%(upload_date)s_%(id)s_%(title).50s.%(ext)s'),
         'ignoreerrors': True,
         'format': 'bestvideo+bestaudio/best',
-        'quiet': True, # We will handle output via logger and hook
+        'quiet': True,
         'no_warnings': True,
         'logger': MyLogger(),
         'progress_hooks': [progress_hook],
@@ -260,11 +341,48 @@ def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
     if cookie_file and os.path.exists(cookie_file):
         ydl_opts['cookiefile'] = cookie_file
 
-    # Download videos one by one to have better control over progress display
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         for index, url in enumerate(video_urls, 1):
-            console_manager.print_final(f"⬇️  [{index}/{len(video_urls)}] Processing: {url}", color=CYAN)
-            ydl.download([url])
+            # Extract info first to populate metadata
+            # We use extract_info with download=False to get metadata, then download
+            # Or we just rely on download hook? extract_info is better for the UI
+            try:
+                # Basic ID/User extraction from URL for initial line
+                # URL structure: https://www.tiktok.com/@user/video/id
+                username = "unknown"
+                vid_id = "unknown"
+                try:
+                    parts = url.split('/')
+                    username = parts[3]
+                    vid_id = parts[5]
+                except:
+                    pass
+
+                video_logger.start_video(index, username, vid_id)
+
+                # Get metadata (fast)
+                info = ydl.extract_info(url, download=False)
+                if info:
+                    title = info.get('title', 'Unknown Title')
+                    fmt = info.get('format', 'best')
+                    # format usually is a string like "248 - 1080x1920 (1080p)+140 - audio only (medium)"
+                    # Simplify format string
+                    width = info.get('width', '?')
+                    height = info.get('height', '?')
+                    simplified_fmt = f"{info.get('ext','mp4')}_{height}p"
+                    
+                    filesize = info.get('filesize', 0) or info.get('filesize_approx', 0)
+                    size_mb = f"{filesize / 1024 / 1024:.1f}MB" if filesize else "?MB"
+                    
+                    video_logger.update_metadata(title, simplified_fmt, size_mb)
+                
+                # Now download
+                ydl.download([url])
+                video_logger.finish_video(status="success")
+            except Exception as e:
+                video_logger.finish_video(status="error", error_msg=str(e))
+    
+    video_logger.print_summary()
 
 async def main():
     parser = argparse.ArgumentParser(description="TikTok Profile Scanner & Downloader")
