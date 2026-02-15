@@ -1,0 +1,292 @@
+import asyncio
+import os
+import argparse
+from playwright.async_api import async_playwright
+from playwright_stealth import Stealth
+import yt_dlp
+import sys
+import re
+
+# Define constants
+DOWNLOAD_DIR = "downloads"
+
+
+def parse_netscape_cookies(file_path):
+    """Parses a Netscape HTTP Cookie File."""
+    cookies = []
+    try:
+        with open(file_path, 'r') as f:
+            for line in f:
+                if line.startswith('#') or not line.strip():
+                    continue
+                
+                parts = line.strip().split('\t')
+                if len(parts) >= 7:
+                    cookie = {
+                        'domain': parts[0],
+                        'path': parts[2],
+                        'secure': parts[3].upper() == 'TRUE',
+                        'expires': float(parts[4]) if parts[4] else -1,
+                        'name': parts[5],
+                        'value': parts[6]
+                    }
+                    cookies.append(cookie)
+    except Exception as e:
+        print(f"Error parsing cookies file: {e}")
+        return []
+    return cookies
+
+class TikTokScanner:
+    def __init__(self, profile_url, headless=True, cookies=None):
+        self.profile_url = profile_url
+        self.headless = headless
+        self.cookies = cookies or []
+        self.video_urls = set()
+
+    async def scan(self):
+        """Scans the profile for video URLs."""
+        print(f"Starting scan for: {self.profile_url}")
+        
+        async with async_playwright() as p:
+            # Launch browser
+            browser = await p.chromium.launch(headless=self.headless)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            
+            if self.cookies:
+                print(f"Loading {len(self.cookies)} cookies...")
+                await context.add_cookies(self.cookies)
+
+            page = await context.new_page()
+            # Apply stealth techniques
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
+
+            try:
+                # Go to profile
+                print("Navigating to profile...")
+                await page.goto(self.profile_url, timeout=60000)
+                await page.wait_for_load_state("networkidle")
+                
+                # Check for errors or login walls
+                if "login" in page.url:
+                    print("Redirected to login. You might need to handle captcha manually or provide cookies.")
+
+                # Advanced Captcha Verification
+                # Check URL or common captcha overlay texts
+                captcha_detected = False
+                if "verify" in page.url or "captcha" in page.url:
+                   captcha_detected = True
+                else:
+                    # Check for overlay elements in main frame
+                    if await page.locator("text=Drag the slider").count() > 0:
+                        captcha_detected = True
+                    elif await page.locator("text=Verify to continue").count() > 0:
+                        captcha_detected = True
+                    elif await page.locator(".captcha-container").count() > 0:
+                        captcha_detected = True
+                    else:
+                        # Check frames
+                        for frame in page.frames:
+                            try:
+                                if await frame.locator("text=Drag the slider").count() > 0:
+                                    captcha_detected = True
+                                    break
+                                if await frame.locator("text=Verify to continue").count() > 0:
+                                    captcha_detected = True
+                                    break
+                            except:
+                                pass
+
+                if captcha_detected:
+                    print("\n!!! Captcha or Verification detected !!!")
+                    print("Please solve the captcha in the browser window.")
+                    input("Press Enter here once you have solved it and the page has loaded...")
+                    # Give it a moment to settle
+                    await page.wait_for_timeout(3000)
+                
+                print("Scanning for videos...")
+                # Scroll and collect
+                last_height = await page.evaluate("document.body.scrollHeight")
+                while True:
+                    # Collect links before scrolling
+                    # Try specific data-e2e selector first, fallback to generic video links
+                    links = await page.locator('[data-e2e="user-post-item"] a').all()
+                    if not links:
+                        links = await page.locator("a").all()
+
+                    for link in links:
+                        href = await link.get_attribute("href")
+                        if href and "/video/" in href:
+                            self.video_urls.add(href)
+                    
+                    print(f"Videos found so far: {len(self.video_urls)}", end='\r')
+
+                    # Scroll down
+                    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    
+                    # Random wait to mimic human behavior slightly
+                    await page.wait_for_timeout(2000)
+                    
+                    # Check if reached bottom
+                    new_height = await page.evaluate("document.body.scrollHeight")
+                    if new_height == last_height:
+                        # Check for captcha again in case it popped up during scrolling
+                        captcha_scroll_detected = False
+                        if await page.locator("text=Drag the slider").count() > 0 or \
+                           await page.locator("text=Verify to continue").count() > 0:
+                            captcha_scroll_detected = True
+                        
+                        if not captcha_scroll_detected:
+                             for frame in page.frames:
+                                try:
+                                    if await frame.locator("text=Drag the slider").count() > 0 or \
+                                       await frame.locator("text=Verify to continue").count() > 0:
+                                        captcha_scroll_detected = True
+                                        break
+                                except:
+                                    pass
+
+                        if captcha_scroll_detected:
+                            print("\n!!! Captcha detected during scroll !!!")
+                            input("Press Enter here once you have solved it...")
+                            await page.wait_for_timeout(3000)
+                            new_height = await page.evaluate("document.body.scrollHeight") # Re-read height
+                        else:
+                            # Try one more wait to be sure
+                            await page.wait_for_timeout(3000)
+                            new_height = await page.evaluate("document.body.scrollHeight")
+                            if new_height == last_height:
+                                break
+                    last_height = new_height
+                
+                print(f"\nScan complete. Total videos found: {len(self.video_urls)}")
+
+            except Exception as e:
+                print(f"Error during scan: {e}")
+            finally:
+                await browser.close()
+        
+        return list(self.video_urls)
+
+class MyLogger:
+    def debug(self, msg):
+        # For compatibility with youtube-dl, both debug and info are passed into debug
+        # You can distinguish them by the prefix '[debug] '
+        if msg.startswith('[debug] '):
+            pass
+        else:
+            self.info(msg)
+
+    def info(self, msg):
+        # Filter out default download progress lines to avoid clutter
+        if "[download]" in msg and "%" in msg:
+            pass
+        else:
+            print(msg)
+
+    def warning(self, msg):
+        print(f"WARNING: {msg}")
+
+    def error(self, msg):
+        print(f"ERROR: {msg}")
+
+def progress_hook(d):
+    if d['status'] == 'downloading':
+        try:
+            p = d.get('_percent_str', 'N/A').replace('%','')
+            speed = d.get('_speed_str', 'N/A')
+            eta = d.get('_eta_str', 'N/A')
+            filename = os.path.basename(d.get('filename', 'Unknown'))
+            
+            # Create a clean progress bar line
+            sys.stdout.write(f"\r[Downloading] {filename} | {p}% | Speed: {speed} | ETA: {eta}   ")
+            sys.stdout.flush()
+        except:
+            pass
+    elif d['status'] == 'finished':
+        print(f"\n[Finished] Download complete: {os.path.basename(d['filename'])}")
+
+def download_videos(video_urls, output_folder=DOWNLOAD_DIR, cookie_file=None):
+    """Downloads videos using yt-dlp."""
+    if not video_urls:
+        print("No videos to download.")
+        return
+
+    print(f"Starting download of {len(video_urls)} videos to '{output_folder}'...")
+    
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+
+    ydl_opts = {
+        # Better naming scheme: Cookie_Date_ID_Title
+        'outtmpl': os.path.join(output_folder, '%(uploader)s_%(upload_date)s_%(id)s_%(title).50s.%(ext)s'),
+        'ignoreerrors': True,
+        'format': 'bestvideo+bestaudio/best',
+        'quiet': True, # We will handle output via logger and hook
+        'no_warnings': True,
+        'logger': MyLogger(),
+        'progress_hooks': [progress_hook],
+    }
+    
+    if cookie_file and os.path.exists(cookie_file):
+        ydl_opts['cookiefile'] = cookie_file
+
+    # Download videos one by one to have better control over progress display
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        for index, url in enumerate(video_urls, 1):
+            print(f"\n[{index}/{len(video_urls)}] Processing: {url}")
+            ydl.download([url])
+
+async def main():
+    parser = argparse.ArgumentParser(description="TikTok Profile Scanner & Downloader")
+    parser.add_argument("url", help="TikTok Profile URL (e.g., https://www.tiktok.com/@username)")
+    parser.add_argument("--headless", action="store_true", help="Run browser in headless mode (default: False)", default=False)
+    parser.add_argument("--dry-run", action="store_true", help="Only scan and list videos without downloading")
+    parser.add_argument("--output", default="downloads", help="Output directory for downloads")
+
+    args = parser.parse_args()
+
+    cookies_path = os.path.join("src", "cookies.txt")
+    cookies = []
+    
+    if os.path.exists(cookies_path):
+        print(f"Found cookies file at '{cookies_path}'. Loading...")
+        cookies = parse_netscape_cookies(cookies_path)
+    else:
+        print(f"No cookies file found at '{cookies_path}'. Continuing without cookies.")
+
+    scanner = TikTokScanner(args.url, headless=args.headless, cookies=cookies)
+    video_urls = await scanner.scan()
+    
+    if video_urls:
+         # Fix URLs if they are relative
+        full_urls = []
+        for url in video_urls:
+            if url.startswith("http"):
+                full_urls.append(url)
+            else:
+                full_urls.append(f"https://www.tiktok.com{url}")
+        
+        print(f"Found {len(full_urls)} videos.")
+        
+        # Extract username for folder creation
+        username = "unknown_user"
+        match = re.search(r'@([a-zA-Z0-9_.-]+)', args.url)
+        if match:
+            username = match.group(1)
+        
+        user_output_dir = os.path.join(args.output, username)
+
+        if args.dry_run:
+            print(f"Dry run enabled. Skipping download to '{user_output_dir}'.")
+            for url in full_urls:
+                print(url)
+        else:
+            download_videos(full_urls, user_output_dir, cookie_file=cookies_path if os.path.exists(cookies_path) else None)
+    else:
+        print("No videos found to download.")
+
+if __name__ == "__main__":
+    asyncio.run(main())

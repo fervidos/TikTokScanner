@@ -1,0 +1,11 @@
+downloads/*
+!downloads/.gitkeep
+__pycache__/
+*.pyc
+venv/
+.env
+src/cookies.txt
+.vscode/
+.idea/
+debug_stealth.py
+find_stealth.py
