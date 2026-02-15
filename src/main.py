@@ -263,7 +263,17 @@ async def main():
     else:
         print(f"No cookies file found at '{cookies_path}'. Continuing without cookies.")
 
-    scanner = TikTokScanner(args.url, headless=is_headless, cookies=cookies)
+    # Normalize input to URL
+    profile_url = args.url
+    if not profile_url.startswith("http"):
+        if profile_url.startswith("@"):
+            profile_url = f"https://www.tiktok.com/{profile_url}"
+        else:
+            profile_url = f"https://www.tiktok.com/@{profile_url}"
+    
+    print(f"Target Profile URL: {profile_url}")
+
+    scanner = TikTokScanner(profile_url, headless=is_headless, cookies=cookies)
     video_urls = await scanner.scan()
     
     if video_urls:
@@ -279,7 +289,7 @@ async def main():
         
         # Extract username for folder creation
         username = "unknown_user"
-        match = re.search(r'@([a-zA-Z0-9_.-]+)', args.url)
+        match = re.search(r'@([a-zA-Z0-9_.-]+)', profile_url)
         if match:
             username = match.group(1)
         
