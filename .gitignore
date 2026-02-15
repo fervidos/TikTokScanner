@@ -8,3 +8,6 @@ venv/
 .idea/
 debug_stealth.py
 find_stealth.py
+
+cookies.txt
+src/cookies.txt
