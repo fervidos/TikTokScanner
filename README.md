@@ -71,6 +71,7 @@ If you encounter frequent captchas or need to access age-restricted content, you
 
 1.  Use a browser extension like **"Get cookies.txt LOCALLY"** (Chrome/Firefox) to export your cookies while logged into TikTok.
 2.  Save the file as `cookies.txt` inside the `src/` folder.
+    *   (Optional) You can rename `src/cookies.txt.example` to `src/cookies.txt` and paste your content there.
 3.  The script will automatically detect and load them.
 
 ## ⚠️ Disclaimer

@@ -1,0 +1,6 @@
+# Netscape HTTP Cookie File
+# http://curl.haxx.se/rfc/cookie_spec.html
+# This is an example file! Rename to cookies.txt and replace values.
+
+.tiktok.com	TRUE	/	TRUE	2147483647	sessionid	YOUR_SESSION_ID_HERE
+.tiktok.com	TRUE	/	TRUE	2147483647	tt_webid_v2	YOUR_WEBID_HERE
