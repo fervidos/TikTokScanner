@@ -248,6 +248,12 @@ async def main():
 
     args = parser.parse_args()
 
+    # Auto-detect headless mode for Linux/Codespaces without DISPLAY
+    is_headless = args.headless
+    if sys.platform == "linux" and not os.environ.get("DISPLAY") and not is_headless:
+        print("No DISPLAY detected. Forcing headless mode.")
+        is_headless = True
+
     cookies_path = os.path.join("src", "cookies.txt")
     cookies = []
     
@@ -257,7 +263,7 @@ async def main():
     else:
         print(f"No cookies file found at '{cookies_path}'. Continuing without cookies.")
 
-    scanner = TikTokScanner(args.url, headless=args.headless, cookies=cookies)
+    scanner = TikTokScanner(args.url, headless=is_headless, cookies=cookies)
     video_urls = await scanner.scan()
     
     if video_urls:
