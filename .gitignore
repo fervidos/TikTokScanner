@@ -4,7 +4,6 @@ __pycache__/
 *.pyc
 venv/
 .env
-src/cookies.txt
 .vscode/
 .idea/
 debug_stealth.py
